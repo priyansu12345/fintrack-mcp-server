@@ -1,14 +1,43 @@
-﻿from pathlib import Path
+﻿import os
+import tempfile
+from pathlib import Path
+
 import aiosqlite
 
 
-DATA_DIR = Path(__file__).parent / "data"
-DATA_DIR.mkdir(exist_ok=True)
+def _is_writable(directory: Path) -> bool:
+    """Return whether SQLite can create files in *directory*."""
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(dir=directory):
+            pass
+        return True
+    except OSError:
+        return False
 
-DB_PATH = DATA_DIR / "expense.db"
+
+def _database_path() -> Path:
+    configured_path = os.getenv("FINTRACK_DB_PATH")
+    if configured_path:
+        path = Path(configured_path).expanduser()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+
+    local_data_dir = Path(__file__).resolve().parent / "data"
+    if _is_writable(local_data_dir):
+        return local_data_dir / "expense.db"
+
+    # Deployed application directories (including Horizon) may be read-only.
+    temporary_data_dir = Path(tempfile.gettempdir()) / "fintrack"
+    temporary_data_dir.mkdir(parents=True, exist_ok=True)
+    return temporary_data_dir / "expense.db"
+
+
+DB_PATH = _database_path()
+
 
 def get_connection():
-    return aiosqlite.connect(DB_PATH)
+    return aiosqlite.connect(str(DB_PATH))
 
 
 async def init_db():
