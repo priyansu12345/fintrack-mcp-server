@@ -1,8 +1,11 @@
 ﻿from pathlib import Path
-
 import aiosqlite
 
-DB_PATH = Path(__file__).parent / "expense.db"
+
+DATA_DIR = Path(__file__).parent / "data"
+DATA_DIR.mkdir(exist_ok=True)
+
+DB_PATH = DATA_DIR / "expense.db"
 
 def get_connection():
     return aiosqlite.connect(DB_PATH)
