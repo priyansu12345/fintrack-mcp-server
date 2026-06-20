@@ -3,6 +3,21 @@ from database import get_connection
 
 ALLOWED_COLUMNS = {"date", "item_name", "amount", "category", "payment_method", "notes"}
 
+@mcp.tool
+async def check_tables():
+    """
+    Debug tool to verify which tables exist in the database.
+    """
+    async with get_connection() as conn:
+        cursor = await conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table';"
+        )
+        rows = await cursor.fetchall()
+
+    return {
+        "db_path": str(DB_PATH),
+        "tables": [row[0] for row in rows]
+    }
 
 @mcp.tool
 async def add_expense(date: str, item_name: str, amount: float, category: str,
