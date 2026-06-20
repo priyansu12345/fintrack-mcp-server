@@ -1,5 +1,5 @@
 ﻿from mcp_instance import mcp
-from database import get_connection
+from database import DB_PATH, get_connection
 
 ALLOWED_COLUMNS = {"date", "item_name", "amount", "category", "payment_method", "notes"}
 
@@ -758,5 +758,4 @@ async def highest_spending_category_by_month(month:str):
         "source": row[0],
         "total_income": row[1]
     }
-
 

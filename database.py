@@ -1,5 +1,6 @@
 ﻿import os
 import tempfile
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import aiosqlite
@@ -34,14 +35,20 @@ def _database_path() -> Path:
 
 
 DB_PATH = _database_path()
+_db_initialized = False
 
 
-def get_connection():
+def _connect():
     return aiosqlite.connect(str(DB_PATH))
 
 
 async def init_db():
-    async with get_connection() as conn:
+    global _db_initialized
+
+    if _db_initialized and DB_PATH.exists():
+        return
+
+    async with _connect() as conn:
         cursor = await conn.cursor()
 
         await cursor.execute('''CREATE TABLE IF NOT EXISTS expenses(
@@ -72,10 +79,17 @@ async def init_db():
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 )''')
         await conn.commit()
+        _db_initialized = True
+
+
+@asynccontextmanager
+async def get_connection():
+    await init_db()
+    async with _connect() as conn:
+        yield conn
 
 
 if __name__ == "__main__":
     import asyncio
 
     asyncio.run(init_db())
-
