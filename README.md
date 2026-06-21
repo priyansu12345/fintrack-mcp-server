@@ -129,7 +129,8 @@ FinTrack MCP Server
  └── Prompts
  │
  ▼
-SQLite Database
+PostgreSQL Database
+(Neon.tech - Cloud Hosted)
 ```
 
 ---
@@ -140,7 +141,8 @@ SQLite Database
 | ---------- | ----------------------- |
 | Python     | Backend Development     |
 | FastMCP    | MCP Server Framework    |
-| SQLite     | Data Storage            |
+| PostgreSQL | Data Storage (Neon.tech)|
+| AsyncPG    | Async PostgreSQL Driver |
 | AsyncIO    | Asynchronous Operations |
 
 ---
@@ -179,7 +181,6 @@ fintrack-mcp-server/
 
 ```bash
 git clone https://github.com/priyansu12345/fintrack-mcp-server.git
-
 cd fintrack-mcp-server
 ```
 
@@ -208,6 +209,16 @@ source .venv/bin/activate
 ```bash
 pip install -r requirements.txt
 ```
+
+## Environment Variables
+
+Create a `.env` file or set the following environment variable:
+
+```bash
+DATABASE_URL=postgresql://username:password@ep-xxx.neon.tech/neondb?sslmode=require
+```
+
+> Get your free PostgreSQL database at [neon.tech](https://neon.tech)
 
 ## Run Server
 
@@ -296,6 +307,8 @@ Generate a detailed financial health report.
 ✅ Remote MCP Deployment
 
 ✅ Async Architecture
+
+✅ Cloud PostgreSQL (Persistent Storage)
 
 ---
 
