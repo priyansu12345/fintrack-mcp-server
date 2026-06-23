@@ -1,5 +1,6 @@
 from mcp_instance import mcp
 from database import get_connection
+import asyncpg
 
 
 @mcp.tool
@@ -15,13 +16,32 @@ async def set_budget(category: str, month: str, monthly_limit: float):
     Returns:
         dict: A confirmation message indicating the budget was added successfully.
     """
-    async with get_connection() as conn:
-        await conn.execute(
-            '''INSERT INTO budgets(category, month, monthly_limit)
-            VALUES ($1, $2, $3)''',
-            category, month, monthly_limit
-        )
-        return {"message": "Budget added successfully"}
+    if not category or not category.strip():
+        return {"error": "Category cannot be empty"}
+    if not month or not month.strip():
+        return {"error": "Month cannot be empty"}
+    if monthly_limit <= 0:
+        return {"error": "Monthly limit must be greater than 0"}
+
+    try:
+        async with get_connection() as conn:
+            existing = await conn.fetchrow(
+                "SELECT id FROM budgets WHERE category = $1 AND month = $2",
+                category, month
+            )
+            if existing:
+                return {"error": f"Budget for '{category}' in {month} already exists. Use update_budget to modify it."}
+
+            await conn.execute(
+                '''INSERT INTO budgets(category, month, monthly_limit)
+                VALUES ($1, $2, $3)''',
+                category, month, monthly_limit
+            )
+            return {"message": "Budget added successfully"}
+    except asyncpg.PostgresError as e:
+        return {"error": f"Database error: {str(e)}"}
+    except Exception as e:
+        return {"error": f"Unexpected error: {str(e)}"}
 
 
 @mcp.tool
@@ -36,13 +56,25 @@ async def get_budget(category: str, month: str):
     Returns:
         dict | None: Budget record or None if not found.
     """
-    async with get_connection() as conn:
-        row = await conn.fetchrow(
-            '''SELECT * FROM budgets
-            WHERE category = $1 AND month = $2''',
-            category, month
-        )
-        return dict(row) if row else None
+    if not category or not category.strip():
+        return {"error": "Category cannot be empty"}
+    if not month or not month.strip():
+        return {"error": "Month cannot be empty"}
+
+    try:
+        async with get_connection() as conn:
+            row = await conn.fetchrow(
+                '''SELECT * FROM budgets
+                WHERE category = $1 AND month = $2''',
+                category, month
+            )
+            if not row:
+                return {"message": f"No budget found for '{category}' in {month}"}
+            return dict(row)
+    except asyncpg.PostgresError as e:
+        return {"error": f"Database error: {str(e)}"}
+    except Exception as e:
+        return {"error": f"Unexpected error: {str(e)}"}
 
 
 @mcp.tool
@@ -53,11 +85,18 @@ async def list_budgets():
     Returns:
         list[dict]: A list of all budget rows ordered by category.
     """
-    async with get_connection() as conn:
-        rows = await conn.fetch(
-            '''SELECT * FROM budgets ORDER BY category'''
-        )
-        return [dict(row) for row in rows]
+    try:
+        async with get_connection() as conn:
+            rows = await conn.fetch(
+                '''SELECT * FROM budgets ORDER BY category'''
+            )
+            if not rows:
+                return {"message": "No budgets have been configured yet."}
+            return [dict(row) for row in rows]
+    except asyncpg.PostgresError as e:
+        return {"error": f"Database error: {str(e)}"}
+    except Exception as e:
+        return {"error": f"Unexpected error: {str(e)}"}
 
 
 @mcp.tool
@@ -68,34 +107,47 @@ async def get_budget_status(category: str, month: str):
     Returns:
         dict: Status report with budget, spent, remaining, percentage_used.
     """
-    async with get_connection() as conn:
-        budget_row = await conn.fetchrow("""
-            SELECT monthly_limit FROM budgets
-            WHERE category = $1 AND month = $2
-        """, category, month)
+    if not category or not category.strip():
+        return {"error": "Category cannot be empty"}
+    if not month or not month.strip():
+        return {"error": "Month cannot be empty"}
 
-        if not budget_row:
-            return {"message": "Budget not found"}
+    try:
+        async with get_connection() as conn:
+            budget_row = await conn.fetchrow("""
+                SELECT monthly_limit FROM budgets
+                WHERE category = $1 AND month = $2
+            """, category, month)
 
-        budget = budget_row["monthly_limit"]
+            if not budget_row:
+                return {"message": f"No budget found for '{category}' in {month}"}
 
-        spent_row = await conn.fetchrow("""
-            SELECT SUM(amount) as total FROM expenses
-            WHERE category = $1 AND date LIKE $2
-        """, category, f"{month}%")
+            budget = budget_row["monthly_limit"]
 
-        spent = spent_row["total"] or 0
-        remaining = budget - spent
-        percentage_used = round((spent / budget) * 100, 2) if budget > 0 else 0
+            if budget <= 0:
+                return {"error": f"Invalid budget limit ({budget}) for '{category}' in {month}"}
 
-        return {
-            "category": category,
-            "month": month,
-            "budget": budget,
-            "spent": spent,
-            "remaining": remaining,
-            "percentage_used": percentage_used
-        }
+            spent_row = await conn.fetchrow("""
+                SELECT SUM(amount) as total FROM expenses
+                WHERE category = $1 AND date LIKE $2
+            """, category, f"{month}%")
+
+            spent = spent_row["total"] or 0
+            remaining = budget - spent
+            percentage_used = round((spent / budget) * 100, 2)
+
+            return {
+                "category": category,
+                "month": month,
+                "budget": budget,
+                "spent": spent,
+                "remaining": remaining,
+                "percentage_used": percentage_used
+            }
+    except asyncpg.PostgresError as e:
+        return {"error": f"Database error: {str(e)}"}
+    except Exception as e:
+        return {"error": f"Unexpected error: {str(e)}"}
 
 
 @mcp.tool
@@ -106,48 +158,61 @@ async def check_budget_alerts():
     Returns:
         list[dict]: Alert reports with status: HEALTHY, WARNING, or OVER_BUDGET.
     """
-    async with get_connection() as conn:
-        all_budgets = await conn.fetch("""
-            SELECT category, month, monthly_limit FROM budgets
-        """)
+    try:
+        async with get_connection() as conn:
+            all_budgets = await conn.fetch("""
+                SELECT category, month, monthly_limit FROM budgets
+            """)
 
-        if not all_budgets:
-            return {"message": "No budgets have been configured yet."}
+            if not all_budgets:
+                return {"message": "No budgets have been configured yet."}
 
-        results = []
+            results = []
 
-        for row in all_budgets:
-            category = row["category"]
-            month = row["month"]
-            monthly_limit = row["monthly_limit"]
+            for row in all_budgets:
+                category = row["category"]
+                month = row["month"]
+                monthly_limit = row["monthly_limit"]
 
-            spent_row = await conn.fetchrow("""
-                SELECT COALESCE(SUM(amount), 0) as total FROM expenses
-                WHERE category = $1 AND date LIKE $2
-            """, category, f"{month}%")
+                if monthly_limit <= 0:
+                    results.append({
+                        "category": category,
+                        "month": month,
+                        "error": f"Invalid monthly limit ({monthly_limit}) — skipping"
+                    })
+                    continue
 
-            spent = spent_row["total"]
-            remaining = monthly_limit - spent
-            percentage_used = round((spent / monthly_limit) * 100, 2) if monthly_limit > 0 else 0
+                spent_row = await conn.fetchrow("""
+                    SELECT COALESCE(SUM(amount), 0) as total FROM expenses
+                    WHERE category = $1 AND date LIKE $2
+                """, category, f"{month}%")
 
-            if percentage_used >= 100:
-                status = "OVER_BUDGET"
-            elif percentage_used >= 80:
-                status = "WARNING"
-            else:
-                status = "HEALTHY"
+                spent = spent_row["total"]
+                remaining = monthly_limit - spent
+                percentage_used = round((spent / monthly_limit) * 100, 2)
 
-            results.append({
-                "category": category,
-                "month": month,
-                "monthly_limit": monthly_limit,
-                "spent": spent,
-                "remaining": remaining,
-                "percentage_used": percentage_used,
-                "status": status
-            })
+                if percentage_used >= 100:
+                    status = "OVER_BUDGET"
+                elif percentage_used >= 80:
+                    status = "WARNING"
+                else:
+                    status = "HEALTHY"
 
-        return results
+                results.append({
+                    "category": category,
+                    "month": month,
+                    "monthly_limit": monthly_limit,
+                    "spent": spent,
+                    "remaining": remaining,
+                    "percentage_used": percentage_used,
+                    "status": status
+                })
+
+            return results
+    except asyncpg.PostgresError as e:
+        return {"error": f"Database error: {str(e)}"}
+    except Exception as e:
+        return {"error": f"Unexpected error: {str(e)}"}
 
 
 @mcp.tool
@@ -158,12 +223,29 @@ async def delete_budget(category: str, month: str):
     Returns:
         dict: Confirmation message.
     """
-    async with get_connection() as conn:
-        await conn.execute(
-            '''DELETE FROM budgets WHERE category = $1 AND month = $2''',
-            category, month
-        )
-    return {"message": f"Budget for {category} ({month}) deleted successfully"}
+    if not category or not category.strip():
+        return {"error": "Category cannot be empty"}
+    if not month or not month.strip():
+        return {"error": "Month cannot be empty"}
+
+    try:
+        async with get_connection() as conn:
+            existing = await conn.fetchrow(
+                "SELECT id FROM budgets WHERE category = $1 AND month = $2",
+                category, month
+            )
+            if not existing:
+                return {"message": f"No budget found for '{category}' in {month}. Nothing to delete."}
+
+            await conn.execute(
+                '''DELETE FROM budgets WHERE category = $1 AND month = $2''',
+                category, month
+            )
+        return {"message": f"Budget for {category} ({month}) deleted successfully"}
+    except asyncpg.PostgresError as e:
+        return {"error": f"Database error: {str(e)}"}
+    except Exception as e:
+        return {"error": f"Unexpected error: {str(e)}"}
 
 
 @mcp.tool
@@ -174,19 +256,30 @@ async def update_budget(category: str, month: str, new_limit: float):
     Returns:
         dict: Confirmation message or not-found message.
     """
-    async with get_connection() as conn:
-        result = await conn.execute("""
-            UPDATE budgets SET monthly_limit = $1
-            WHERE category = $2 AND month = $3
-        """, new_limit, category, month)
+    if not category or not category.strip():
+        return {"error": "Category cannot be empty"}
+    if not month or not month.strip():
+        return {"error": "Month cannot be empty"}
+    if new_limit <= 0:
+        return {"error": "New limit must be greater than 0"}
 
-        # asyncpg returns "UPDATE N" string
-        rows_affected = int(result.split()[-1])
+    try:
+        async with get_connection() as conn:
+            result = await conn.execute("""
+                UPDATE budgets SET monthly_limit = $1
+                WHERE category = $2 AND month = $3
+            """, new_limit, category, month)
 
-        if rows_affected == 0:
-            return {"message": f"Budget not found for {category} in {month}"}
+            rows_affected = int(result.split()[-1])
 
-        return {"message": f"{category}'s {month} budget updated to {new_limit}"}
+            if rows_affected == 0:
+                return {"message": f"Budget not found for '{category}' in {month}"}
+
+            return {"message": f"{category}'s {month} budget updated to {new_limit}"}
+    except asyncpg.PostgresError as e:
+        return {"error": f"Database error: {str(e)}"}
+    except Exception as e:
+        return {"error": f"Unexpected error: {str(e)}"}
 
 
 @mcp.tool
@@ -197,43 +290,51 @@ async def list_over_budget_details():
     Returns:
         list[dict]: Over-budget entries with exceeded_by and percentage_used.
     """
-    async with get_connection() as conn:
-        all_budgets = await conn.fetch("""
-            SELECT category, month, monthly_limit FROM budgets
-        """)
+    try:
+        async with get_connection() as conn:
+            all_budgets = await conn.fetch("""
+                SELECT category, month, monthly_limit FROM budgets
+            """)
 
-        if not all_budgets:
-            return {"message": "No budgets have been configured yet."}
+            if not all_budgets:
+                return {"message": "No budgets have been configured yet."}
 
-        over_budget = []
+            over_budget = []
 
-        for row in all_budgets:
-            category = row["category"]
-            month = row["month"]
-            monthly_limit = row["monthly_limit"]
+            for row in all_budgets:
+                category = row["category"]
+                month = row["month"]
+                monthly_limit = row["monthly_limit"]
 
-            spent_row = await conn.fetchrow("""
-                SELECT COALESCE(SUM(amount), 0) as total FROM expenses
-                WHERE category = $1 AND date LIKE $2
-            """, category, f"{month}%")
+                if monthly_limit <= 0:
+                    continue
 
-            spent = spent_row["total"]
-            percentage_used = round((spent / monthly_limit) * 100, 2) if monthly_limit > 0 else 0
+                spent_row = await conn.fetchrow("""
+                    SELECT COALESCE(SUM(amount), 0) as total FROM expenses
+                    WHERE category = $1 AND date LIKE $2
+                """, category, f"{month}%")
 
-            if percentage_used >= 100:
-                over_budget.append({
-                    "category": category,
-                    "month": month,
-                    "monthly_limit": monthly_limit,
-                    "spent": spent,
-                    "exceeded_by": round(spent - monthly_limit, 2),
-                    "percentage_used": percentage_used
-                })
+                spent = spent_row["total"]
+                percentage_used = round((spent / monthly_limit) * 100, 2)
 
-        if not over_budget:
-            return {"message": "All categories are within budget!"}
+                if percentage_used >= 100:
+                    over_budget.append({
+                        "category": category,
+                        "month": month,
+                        "monthly_limit": monthly_limit,
+                        "spent": spent,
+                        "exceeded_by": round(spent - monthly_limit, 2),
+                        "percentage_used": percentage_used
+                    })
 
-        return over_budget
+            if not over_budget:
+                return {"message": "All categories are within budget!"}
+
+            return over_budget
+    except asyncpg.PostgresError as e:
+        return {"error": f"Database error: {str(e)}"}
+    except Exception as e:
+        return {"error": f"Unexpected error: {str(e)}"}
 
 
 @mcp.tool
@@ -244,26 +345,31 @@ async def budget_health_report():
     Returns:
         dict: Counts of HEALTHY, WARNING, OVER_BUDGET, TOTAL_BUDGETS.
     """
-    reports = await check_budget_alerts()
+    try:
+        reports = await check_budget_alerts()
 
-    if isinstance(reports, dict):
-        return reports
+        if isinstance(reports, dict):
+            return reports
 
-    response = {
-        "HEALTHY": 0,
-        "WARNING": 0,
-        "OVER_BUDGET": 0,
-        "TOTAL_BUDGETS": 0
-    }
+        response = {
+            "HEALTHY": 0,
+            "WARNING": 0,
+            "OVER_BUDGET": 0,
+            "TOTAL_BUDGETS": 0
+        }
 
-    for report in reports:
-        status = report["status"]
-        if status == "HEALTHY":
-            response["HEALTHY"] += 1
-        elif status == "WARNING":
-            response["WARNING"] += 1
-        elif status == "OVER_BUDGET":
-            response["OVER_BUDGET"] += 1
+        for report in reports:
+            if "error" in report:
+                continue
+            status = report.get("status")
+            if status == "HEALTHY":
+                response["HEALTHY"] += 1
+            elif status == "WARNING":
+                response["WARNING"] += 1
+            elif status == "OVER_BUDGET":
+                response["OVER_BUDGET"] += 1
 
-    response["TOTAL_BUDGETS"] = len(reports)
-    return response
+        response["TOTAL_BUDGETS"] = len(reports)
+        return response
+    except Exception as e:
+        return {"error": f"Unexpected error generating health report: {str(e)}"}
